@@ -1,0 +1,11 @@
+# Secrets and machine-specific settings - copy config.example.json to config.json
+config.json
+
+# Runtime output
+logs/
+*.log
+
+# OS clutter
+Thumbs.db
+desktop.ini
+.DS_Store

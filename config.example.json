@@ -1,0 +1,33 @@
+{
+  "ProPresenterHost": "10.100.90.13",
+  "ProPresenterPort": 58344,
+
+  "PcoAppId": "PASTE_PCO_APPLICATION_ID",
+  "PcoSecret": "PASTE_PCO_SECRET",
+  "ServiceTypeId": "37405",
+
+  "PollIntervalMs": 500,
+  "DebounceSeconds": 2,
+  "MatchThreshold": 60,
+  "MaxStepsPerMove": 30,
+  "SecondServiceLeadMinutes": 20,
+  "TakeControlIfNeeded": true,
+  "ArmMinutesBeforeService": 5,
+  "ArmMinutesAfterServiceEnd": 30,
+  "PlanRefreshMinutes": 5,
+
+  "IgnorePresentations": [
+    "(?i)^blank",
+    "(?i)logo",
+    "(?i)countdown"
+  ],
+
+  "Rules": [
+    { "match": "(?i)\\b(sermon|message|james)\\b|^\\s*\\d{1,2}-\\d{1,2}-\\d{2,4}\\b|^\\s*(\\d\\s*)?[a-z]+\\s+\\d+:\\d+", "afterHeader": "(?i)^the word" },
+    { "match": "(?i)announce|weekly slides", "item": "(?i)weekly slides" },
+    { "match": "(?i)welcome", "item": "(?i)^welcome" },
+    { "match": "(?i)bumper", "item": "(?i)bumper" },
+    { "match": "(?i)scripture|reading", "item": "(?i)scripture" },
+    { "match": "(?i)pastoral|offering|giving|prayer", "item": "(?i)pastoral|prayer|giving" }
+  ]
+}
