@@ -106,13 +106,22 @@ The bridge is the same script on Mac; only the launchers and auto-start differ.
    ```bash
    brew install --cask powershell
    ```
-   Or use the installer from <https://aka.ms/powershell-release?tag=stable>.
-2. **Allow the launchers to run.** Files downloaded from GitHub lose their "executable" flag. In Terminal, in the bridge folder, run this once:
+   Or use the macOS `.pkg` installer from <https://aka.ms/powershell-release?tag=stable>. Check it worked with `pwsh --version`.
+2. **Allow the launchers to run.** Files downloaded from GitHub lose their "executable" flag and are quarantined by macOS. In Terminal, go to the bridge folder (adjust the path to where you put it) and run these once:
    ```bash
+   cd ~/Documents/PCO-Live-Bridge
    chmod +x *.command *.sh
+   xattr -dr com.apple.quarantine .
    ```
    The first time you double-click `Start-Bridge.command`, macOS may say it's from an unidentified developer. Right-click it, choose **Open**, then **Open** again.
-3. **Config:** steps 1–3 of [Setup](#setup-about-15-minutes) are the same. Commands look like this:
+3. **Config:** steps 1–3 of [Setup](#setup-about-15-minutes) are the same. To create and edit the config in Terminal:
+   ```bash
+   cp config.example.json config.json
+   nano config.json
+   ```
+   In `nano`, save with **Ctrl+O** then **Return**, and exit with **Ctrl+X**. Don't edit it in TextEdit: it turns `"` into curly quotes, which breaks the file. (If you must, turn off **Edit → Substitutions → Smart Quotes** and use **Format → Make Plain Text** first.)
+
+   The setup and test commands look like this:
    ```bash
    ./Start-Bridge.command -ListServiceTypes
    ./Start-Bridge.command -TestPP
