@@ -8,9 +8,9 @@
   library path) to an item in today's PCO plan and steps PCO Live forward/back
   until Live is on that item. Unmatched presentations are ignored (Live stays put).
 
-  Handles two service times (9:30 / 11:00): when the operator starts the song
-  list over near the second service, the bridge moves into the second service
-  time instead of stepping backwards through the first.
+  Handles several service times in one plan (e.g. 9:00 / 11:00): when the
+  operator starts the song list over near the next service, the bridge moves
+  into the next service time instead of stepping backwards through the first.
 
 .PARAMETER ConfigPath  Path to config.json (default: next to this script)
 .PARAMETER DryRun      Log what would happen; never touch PCO Live.
@@ -25,8 +25,10 @@ param(
     [string]$ConfigPath = '',
     [switch]$DryRun,
     [switch]$ListPlan,
+    [switch]$ListServiceTypes,
     [switch]$TestPP,
     [switch]$IgnoreSchedule,
+    [switch]$OnlyIfServiceToday,
     [string]$PlanId
 )
 
@@ -55,9 +57,10 @@ $MaxSteps        = [int](CfgVal 'MaxStepsPerMove' 30)
 $LeadMin         = [int](CfgVal 'SecondServiceLeadMinutes' 20)
 $TakeControl     = [bool](CfgVal 'TakeControlIfNeeded' $true)
 $PlanRefreshMin  = [int](CfgVal 'PlanRefreshMinutes' 5)
-$ArmBefore       = [int](CfgVal 'ArmMinutesBeforeService' -1)   # -1 = always armed
+$ArmBefore       = [int](CfgVal 'ArmMinutesBeforeService' 5)    # -1 = always armed
 $ArmAfter        = [int](CfgVal 'ArmMinutesAfterServiceEnd' 30)
 $IncludeAddedItems = [bool](CfgVal 'IncludeExcludedItems' $true)
+$MaxBackItems    = [int](CfgVal 'MaxBackItems' 2)
 $LogDir          = CfgVal 'LogDirectory' (Join-Path $ScriptDir 'logs')
 $Rules           = @(CfgVal 'Rules' @())
 $IgnorePatterns  = @(CfgVal 'IgnorePresentations' @())
@@ -66,10 +69,32 @@ $du = CfgVal 'DisarmedUntil' ''
 if ($du) { try { $DisarmedUntil = [datetime]::Parse("$du") } catch { throw "DisarmedUntil in config.json is not a valid date/time: $du" } }
 function Test-Disarmed { return ($null -ne $DisarmedUntil -and (Get-Date) -lt $DisarmedUntil) }
 
-if (-not $ServiceTypeId) { throw 'ServiceTypeId is required in config.json' }
+$CfgName = Split-Path -Leaf $ConfigPath
+if ($ServiceTypeId -notmatch '^\d+$' -and -not $ListServiceTypes) {
+    throw "ServiceTypeId in $CfgName is missing or not a number ('$ServiceTypeId'). Run with -ListServiceTypes to see yours."
+}
 $appId  = CfgVal 'PcoAppId' ''
 $secret = CfgVal 'PcoSecret' ''
-if (-not $appId -or -not $secret) { throw 'PcoAppId and PcoSecret (Personal Access Token) are required in config.json' }
+if (-not $appId -or -not $secret -or "$appId$secret" -match 'PASTE_') {
+    throw "PcoAppId and PcoSecret (a Planning Center Personal Access Token) must be filled in in $CfgName. See README, Setup step 2."
+}
+
+# Check the matching rules up front so a typo fails now, not mid-service.
+$ruleNo = 0
+foreach ($rule in $Rules) {
+    $ruleNo++
+    $hasItem   = $rule.PSObject.Properties['item'] -and $rule.item
+    $hasHeader = $rule.PSObject.Properties['afterHeader'] -and $rule.afterHeader
+    if (-not ($rule.PSObject.Properties['match'] -and $rule.match)) { throw "Rule #$ruleNo in $CfgName has no 'match'." }
+    if (-not ($hasItem -or $hasHeader)) { throw "Rule #$ruleNo in $CfgName ('$($rule.match)') needs an 'item' or an 'afterHeader'." }
+    foreach ($pat in @($rule.match, $(if ($hasItem) { $rule.item }), $(if ($hasHeader) { $rule.afterHeader }))) {
+        if (-not $pat) { continue }
+        try { [void][regex]::new("$pat") } catch { throw "Rule #$ruleNo in ${CfgName}: '$pat' is not a valid regex. $($_.Exception.InnerException.Message)" }
+    }
+}
+foreach ($pat in $IgnorePatterns) {
+    try { [void][regex]::new("$pat") } catch { throw "IgnorePresentations in ${CfgName}: '$pat' is not a valid regex." }
+}
 $PcoAuth = 'Basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($appId):$($secret)"))
 
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
@@ -160,6 +185,7 @@ $Script:LiveSelf = $null
 $Script:LastLiveRaw = $null
 $Script:SaidControl = $false
 $Script:ServiceDoneMsg = $false
+$Script:TooFarBackMsg = $false
 $Script:Skipped = @{}   # "itemId|planTimeId" that Live skips (item excluded from that service)
 $Script:PlanLoadedAt = [datetime]::MinValue
 
@@ -309,6 +335,13 @@ function Resolve-Target($candidates, $live) {
             if ($options.Count -eq 0) { $Script:ServiceDoneMsg = $true; return $null }
         }
     }
+    # Don't rewind far: a song repeated later (e.g. an earlier worship song reused as the invitation)
+    # would otherwise drag Live back through the service. Small step-backs (operator went back a song) are fine.
+    if ($live.Started -and $MaxBackItems -ge 0) {
+        $before = $options.Count
+        $options = @($options | Where-Object { -not ($_.Pos -lt $curPos -and ($curPos - $_.Pos) -gt $MaxBackItems) })
+        if ($options.Count -eq 0 -and $before -gt 0) { $Script:TooFarBackMsg = $true; return $null }
+    }
     # Drop items Live has already shown it skips in that service (excluded in PCO for that time).
     $options = @($options | Where-Object { -not $Script:Skipped.ContainsKey("$($_.Item.Id)|$($_.St.Id)") })
     if ($options.Count -eq 0) { return $null }
@@ -319,7 +352,7 @@ function Resolve-Target($candidates, $live) {
 }
 
 # If an item is turned off ("excluded") for the target service time - e.g. an invitation song added
-# during the 9:30 - turn it on for that time so PCO Live will land on it. Returns $true if it is included.
+# during the first service - turn it on for that time so PCO Live will land on it. Returns $true if it is included.
 function Ensure-ItemIncluded($target) {
     if (-not $IncludeAddedItems) { return $true }
     $base = "/services/v2/service_types/$ServiceTypeId/plans/$($Script:Plan.id)/items/$($target.Item.Id)/item_times"
@@ -420,6 +453,13 @@ function Format-ArmTime($st) {
 }
 
 # ---------------------------------------------------------------- entry points
+if ($ListServiceTypes) {
+    $types = Get-PcoAll '/services/v2/service_types?per_page=100&order=name'
+    Write-Host 'Planning Center service types (put the ID in config.json as ServiceTypeId):' -ForegroundColor Cyan
+    foreach ($t in $types) { Write-Host ("  {0,-10} {1}" -f $t.id, $t.attributes.name) }
+    exit 0
+}
+
 if ($TestPP) {
     $v = Invoke-PP '/version'
     if (-not $v) { Log "No response from ProPresenter at $PPBase. Check ProPresenter > Settings > Network > Enable Network." 'ERROR'; exit 1 }
@@ -430,8 +470,24 @@ if ($TestPP) {
     exit 0
 }
 
+# Only one live bridge at a time (scheduled task + a double-click would otherwise fight over PCO Live).
+$Script:Mutex = $null
+if (-not $DryRun -and -not $TestPP -and -not $ListPlan) {
+    $Script:Mutex = New-Object System.Threading.Mutex($false, 'Local\PcoLiveBridge')
+    $got = $false
+    try { $got = $Script:Mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+    if (-not $got) { Log 'Another PCO Live Bridge is already running on this PC - this copy is exiting.' 'WARN'; exit 0 }
+}
+
 Log "PCO Live Bridge starting  (ProPresenter $PPBase, service type $ServiceTypeId$(if ($DryRun) {', DRY RUN'}))"
 Load-Plan
+if ($OnlyIfServiceToday) {
+    $today = (Get-Date).Date
+    if (-not ($Script:ServiceTimes | Where-Object { $_.Start.Date -eq $today })) {
+        Log 'No service in this plan today - exiting (started with -OnlyIfServiceToday).'
+        exit 0
+    }
+}
 if (Test-Disarmed) { Log "Bridge is DISARMED until $($DisarmedUntil.ToString('dddd M/d h:mm tt')) (DisarmedUntil in config.json) - it will only log, not move PCO Live" 'WARN' }
 Log "Plan: $($Script:Plan.attributes.dates) '$($Script:Plan.attributes.title)'  id $($Script:Plan.id)  - $($Script:Items.Count) items, $($Script:ServiceTimes.Count) service times"
 
@@ -448,6 +504,7 @@ if ($ListPlan) {
 
 $lastUuid = $null; $pendingUuid = $null; $pendingSince = $null; $ppDown = $false
 $wasArmed = $null
+$heldUuid = $null; $heldSince = $null   # presentation held back because the service had finished
 if ($ArmBefore -ge 0 -and -not $IgnoreSchedule) { Log "Schedule: arms $ArmBefore min before each service, disarms $ArmAfter min after its scheduled end" }
 
 while ($true) {
@@ -480,6 +537,10 @@ while ($true) {
             if (-not $ppDown -and -not (Invoke-PP '/version')) { Log "Lost ProPresenter at $PPBase" 'WARN'; $ppDown = $true }
         } else {
             if ($ppDown) { Log 'ProPresenter is back'; $ppDown = $false }
+            # A loop that came up a few minutes before the next service's handoff window: look at it again every 30 s.
+            if ($heldUuid -and $a.Uuid -eq $heldUuid -and $a.Uuid -eq $lastUuid -and ((Get-Date) - $heldSince).TotalSeconds -ge 30) {
+                $lastUuid = $null; $pendingUuid = $a.Uuid; $pendingSince = (Get-Date).AddSeconds(-$DebounceSec)
+            }
             if ($a.Uuid -ne $lastUuid) {
                 if ($a.Uuid -ne $pendingUuid) { $pendingUuid = $a.Uuid; $pendingSince = Get-Date }
                 elseif (((Get-Date) - $pendingSince).TotalSeconds -ge $DebounceSec) {
@@ -490,13 +551,25 @@ while ($true) {
                     elseif (-not $arm.Armed -and -not $DryRun) { Log "ProPresenter: '$($a.Name)' - not armed yet (arms at $(Format-ArmTime $arm.Next)), PCO Live untouched" }
                     else {
                         $c = Find-Candidates $a.Name $a.Path $a.PlaylistItem
+                        if (-not $c) {
+                            # Maybe it was just added to the plan (e.g. the invitation song): reload and try once more.
+                            try { Load-Plan } catch {}
+                            $c = Find-Candidates $a.Name $a.Path $a.PlaylistItem
+                            if ($c) { Log "Found '$($a.Name)' after reloading the plan ($($Script:Items.Count) items)" }
+                        }
                         if (-not $c) { Log "ProPresenter: '$($a.Name)' - no plan match, PCO Live stays put" 'WARN' }
                         else {
                             Log "ProPresenter: '$($a.Name)' -> $($c.Why)"
-                            $Script:ServiceDoneMsg = $false
+                            $Script:ServiceDoneMsg = $false; $Script:TooFarBackMsg = $false
                             $target = Resolve-Target $c.Items (Get-LiveState)
+                            $wasHeld = ($heldUuid -eq $a.Uuid)
+                            $heldUuid = $null
                             if ($target) { Move-LiveTo $target }
-                            elseif ($Script:ServiceDoneMsg) { Log "Service is finished (Live is on the last item) - not rewinding PCO Live for '$($a.Name)'" }
+                            elseif ($Script:TooFarBackMsg) { Log "'$($a.Name)' is earlier in the plan than where Live is - not rewinding (add it again later in the PCO plan if it's being reused)" 'WARN' }
+                            elseif ($Script:ServiceDoneMsg) {
+                                if (-not $wasHeld) { Log "Service is finished (Live is on the last item) - not rewinding PCO Live for '$($a.Name)'" }
+                                $heldUuid = $a.Uuid; $heldSince = Get-Date
+                            }
                             else { Log "'$($a.Name)' is excluded from this service in PCO - PCO Live stays put" 'WARN' }
                         }
                     }

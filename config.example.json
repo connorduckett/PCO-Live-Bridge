@@ -1,33 +1,53 @@
 {
-  "ProPresenterHost": "10.100.90.13",
-  "ProPresenterPort": 58344,
-
+  "ProPresenterHost": "127.0.0.1",
+  "ProPresenterPort": 1025,
   "PcoAppId": "PASTE_PCO_APPLICATION_ID",
   "PcoSecret": "PASTE_PCO_SECRET",
-  "ServiceTypeId": "37405",
-
+  "ServiceTypeId": "RUN_-ListServiceTypes_TO_FIND_THIS",
   "PollIntervalMs": 500,
   "DebounceSeconds": 2,
   "MatchThreshold": 60,
   "MaxStepsPerMove": 30,
+  "MaxBackItems": 2,
   "SecondServiceLeadMinutes": 20,
   "TakeControlIfNeeded": true,
+  "IncludeExcludedItems": true,
   "ArmMinutesBeforeService": 5,
   "ArmMinutesAfterServiceEnd": 30,
   "PlanRefreshMinutes": 5,
-
   "IgnorePresentations": [
     "(?i)^blank",
     "(?i)logo",
     "(?i)countdown"
   ],
-
   "Rules": [
-    { "match": "(?i)\\b(sermon|message|james)\\b|^\\s*\\d{1,2}-\\d{1,2}-\\d{2,4}\\b|^\\s*(\\d\\s*)?[a-z]+\\s+\\d+:\\d+", "afterHeader": "(?i)^the word" },
-    { "match": "(?i)announce|weekly slides", "item": "(?i)weekly slides" },
-    { "match": "(?i)welcome", "item": "(?i)^welcome" },
-    { "match": "(?i)bumper", "item": "(?i)bumper" },
-    { "match": "(?i)scripture|reading", "item": "(?i)scripture" },
-    { "match": "(?i)pastoral|offering|giving|prayer", "item": "(?i)pastoral|prayer|giving" }
+    {
+      "match": "(?i)\\b(sermon|message)\\b|^\\s*\\d{1,2}-\\d{1,2}-\\d{2,4}\\b",
+      "afterHeader": "(?i)^(the word|message|sermon)"
+    },
+    {
+      "match": "(?i)announce|weekly slides|pre-?service|loop|walk-?in",
+      "item": "(?i)announce|weekly slides|pre-?service|loop|walk-?in"
+    },
+    {
+      "match": "(?i)welcome",
+      "item": "(?i)^welcome"
+    },
+    {
+      "match": "(?i)bumper|opener",
+      "item": "(?i)bumper|opener"
+    },
+    {
+      "match": "(?i)scripture|reading",
+      "item": "(?i)scripture|reading"
+    },
+    {
+      "match": "(?i)pastoral|offering|giving|prayer",
+      "item": "(?i)pastoral|offering|giving|prayer"
+    },
+    {
+      "match": "(?i)lord'?s?\\s*supper|communion",
+      "item": "(?i)lord.?s supper|communion|^the bread|^the cup"
+    }
   ]
 }

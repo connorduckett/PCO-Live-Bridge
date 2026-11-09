@@ -1,5 +1,7 @@
 # Secrets and machine-specific settings - copy config.example.json to config.json
 config.json
+config-*.json
+CLAUDE.local.md
 
 # Runtime output
 logs/
@@ -9,3 +11,4 @@ logs/
 Thumbs.db
 desktop.ini
 .DS_Store
+Restore-*.ps1
